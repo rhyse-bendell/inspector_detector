@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Configuration>
+  <VGpu>Disable</VGpu>
+  <Networking>Disable</Networking>
+  <ProtectedClient>Enable</ProtectedClient>
+  <AudioInput>Disable</AudioInput>
+  <VideoInput>Disable</VideoInput>
+  <PrinterRedirection>Disable</PrinterRedirection>
+  <ClipboardRedirection>Disable</ClipboardRedirection>
+  <MemoryInMB>2048</MemoryInMB>
+  <MappedFolders>
+    <MappedFolder><HostFolder>C:\Repo &amp; Tools\dist\FileGuardian</HostFolder><SandboxFolder>C:\FileGuardian\Runtime</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>C:\Input &amp; Research\A&lt;B&gt;'Unicode'</HostFolder><SandboxFolder>C:\FileGuardian\Input</SandboxFolder><ReadOnly>true</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>C:\Users\User\AppData\Local\FileGuardian\Runs\abc</HostFolder><SandboxFolder>C:\FileGuardian\Output</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
+    <MappedFolder><HostFolder>C:\Users\User\AppData\Local\FileGuardian\State</HostFolder><SandboxFolder>C:\FileGuardian\State</SandboxFolder><ReadOnly>false</ReadOnly></MappedFolder>
+  </MappedFolders>
+  <LogonCommand><Command>C:\FileGuardian\Runtime\FileGuardian.exe C:\FileGuardian\Input --recursive --gui --json C:\FileGuardian\Output\file_guardian_report.json --csv C:\FileGuardian\Output\file_guardian_report.csv --tag-store C:\FileGuardian\State\tags.json --execution-environment windows-sandbox</Command></LogonCommand>
+</Configuration>
