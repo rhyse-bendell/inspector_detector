@@ -1,0 +1,4 @@
+pypdf>=6.0,<7
+Pillow>=10.0,<13
+oletools>=0.60,<0.61
+defusedxml>=0.7,<1
