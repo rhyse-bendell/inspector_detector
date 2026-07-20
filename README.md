@@ -15,6 +15,54 @@ It does **not** upload files or make network requests. The scanner reads source 
 
 The application should also start in a reduced-capability mode with only the Python standard library. Installing the requirements enables deeper PDF, image-metadata, and Office macro analysis.
 
+
+
+## Execution modes on Windows
+
+`Run_File_Guardian.bat` opens a small launcher before any document parser starts. On first use, **Run locally** is selected by default. The choices are:
+
+- **Run locally** — runs directly on this computer and is available immediately, including when firmware virtualization is disabled, Windows Sandbox is unavailable, Windows Sandbox is not installed, or the Windows edition does not support it.
+- **Run in Windows Sandbox** — runs the packaged File Guardian executable in a disposable Windows environment with the selected input folder mounted read-only. This requires a supported Windows edition, firmware virtualization, Windows Sandbox, and a built standalone runtime.
+
+The launcher can optionally remember only the selected execution mode in `%LOCALAPPDATA%\FileGuardian\launcher-settings.json`. It does not store selected research paths, filenames, report contents, or document metadata there. Use **Forget saved choice** in the launcher to clear the remembered preference, or delete `%LOCALAPPDATA%\FileGuardian\launcher-settings.json` manually.
+
+Local mode remains a fully supported path. Before the first local scan in a launcher session it warns: “Local mode runs document parsing libraries directly on this computer. Use Sandbox mode for stronger isolation when available.” You may continue or cancel. File Guardian does not request administrator elevation merely to run locally and does not describe local parsing as equivalent to sandbox isolation.
+
+### Windows Sandbox prerequisites
+
+File Guardian does not automatically enable virtualization, Hyper-V, optional Windows features, or Windows Sandbox, and it does not elevate itself to change operating-system settings. If Sandbox mode is selected and a prerequisite is unavailable, the launcher explains the issue and lets you return to the selector, explicitly run locally instead, or cancel. There is no silent local fallback.
+
+On supported Windows editions, the Windows Sandbox feature can be enabled from an elevated PowerShell prompt with:
+
+```powershell
+Enable-WindowsOptionalFeature -Online -FeatureName "Containers-DisposableClientVM" -All
+```
+
+A restart is normally required after enabling the feature. Firmware virtualization must be enabled separately in BIOS/UEFI if it is disabled.
+
+### Build the standalone Sandbox runtime
+
+Sandbox mode uses a PyInstaller one-folder build so Windows Sandbox does not need Python, pip, network access, or writable source-code mappings. Build it on the host with:
+
+```bat
+Build_Sandbox_Runtime.bat
+```
+
+The build script creates `.build-venv`, installs `requirements.txt` plus bounded PyInstaller build requirements, runs the test suite, builds `dist\FileGuardian\FileGuardian.exe`, and runs `dist\FileGuardian\FileGuardian.exe --version`. Generated build output is intentionally ignored by Git.
+
+### Sandbox mappings and output handling
+
+Sandbox configuration is generated with XML APIs and hardened defaults: vGPU, networking, protected-client inputs, audio input, video input, printer redirection, and clipboard redirection are controlled in the `.wsb`, with 2048 MB memory by default. Advanced callers may request more memory, but values below 2048 MB are rejected.
+
+Only these folders are mapped:
+
+- runtime: `<repository>\dist\FileGuardian` to `C:\FileGuardian\Runtime`, read-only;
+- selected input folder to `C:\FileGuardian\Input`, read-only;
+- unique output folder under `%LOCALAPPDATA%\FileGuardian\Runs\<unique-run-id>` to `C:\FileGuardian\Output`, writable;
+- dedicated state folder `%LOCALAPPDATA%\FileGuardian\State` to `C:\FileGuardian\State`, writable.
+
+The repository source tree, `C:\`, the user profile, Desktop, Documents, Downloads, and unrelated research folders are not broadly mapped. Treat Sandbox output and state folders as untrusted because they are writable by code running inside the sandbox. A clean scan is not proof that a file is safe or authorized to share.
+
 ## What version 0.1 inspects
 
 ### Modern Microsoft Office files
@@ -136,7 +184,11 @@ CLI exit codes are:
 - `requirements.txt` — optional parsing dependencies.
 - `tests/` — regression tests using synthetic files.
 - `Install_and_Run.bat` — first-run setup and launcher.
-- `Run_File_Guardian.bat` — normal Windows launcher.
+- `Run_File_Guardian.bat` — Windows execution-mode selector.
+- `Run_File_Guardian_Locally.bat` — direct local Windows launcher.
+- `launcher/` — host-side launcher preference and mode-selection PowerShell.
+- `sandbox/` — Windows Sandbox prerequisite checks and `.wsb` generation.
+- `Build_Sandbox_Runtime.bat`, `file_guardian.spec`, `requirements-build.txt` — standalone runtime packaging.
 - `run_file_guardian.sh` — macOS/Linux setup and launcher.
 
 ## Planned next steps

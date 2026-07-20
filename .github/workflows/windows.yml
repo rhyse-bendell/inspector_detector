@@ -1,0 +1,50 @@
+name: Windows runtime and sandbox configuration
+on:
+  push:
+    branches: [ main, work ]
+  pull_request:
+    branches: [ main ]
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+      - name: Run Python tests
+        run: python -m unittest discover -s tests -v
+      - name: Run PowerShell tests
+        shell: pwsh
+        run: |
+          Install-Module Pester -Force -Scope CurrentUser
+          Invoke-Pester -Path tests/powershell -CI
+      - name: Build PyInstaller one-folder runtime
+        shell: cmd
+        run: Build_Sandbox_Runtime.bat
+      - name: Packaged executable version
+        shell: cmd
+        run: dist\FileGuardian\FileGuardian.exe --version
+      - name: Packaged executable CLI smoke scan
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path synthetic | Out-Null
+          Set-Content -Path synthetic\sample.txt -Value 'https://example.test/?utm_source=ci'
+          & .\dist\FileGuardian\FileGuardian.exe .\synthetic --recursive --json .\synthetic\report.json --csv .\synthetic\report.csv
+          if (-not (Test-Path .\synthetic\report.json)) { throw 'Missing JSON report' }
+          if (-not (Test-Path .\synthetic\report.csv)) { throw 'Missing CSV report' }
+          Get-Content .\synthetic\report.json -Raw | ConvertFrom-Json | Out-Null
+      - name: Generate and validate WSB XML without launching Sandbox
+        shell: pwsh
+        run: |
+          $input = Join-Path $PWD 'synthetic'
+          $wsb = & .\sandbox\Launch-FileGuardianSandbox.ps1 -RepositoryRoot $PWD -InputFolder $input -GenerateOnly -AssumePrerequisites
+          [xml]$xml = Get-Content -LiteralPath $wsb -Raw
+          if ($xml.Configuration.Networking -ne 'Disable') { throw 'Networking not disabled' }
+          if ($xml.Configuration.MappedFolders.MappedFolder.Count -ne 4) { throw 'Unexpected mappings' }
+          if ($xml.Configuration.MappedFolders.MappedFolder[0].ReadOnly -ne 'true') { throw 'Runtime not read-only' }
+          if ($xml.Configuration.MappedFolders.MappedFolder[1].ReadOnly -ne 'true') { throw 'Input not read-only' }

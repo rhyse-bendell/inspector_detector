@@ -19,9 +19,9 @@ from file_guardian import (
 )
 
 
-def run_cli(paths: Iterable[str], recursive: bool, json_path: str | None, csv_path: str | None) -> int:
+def run_cli(paths: Iterable[str], recursive: bool, json_path: str | None, csv_path: str | None, tag_store_path: str | None = None, execution_environment: str | None = None) -> int:
     scanner = FileScanner()
-    tag_store = TagStore()
+    tag_store = TagStore(Path(tag_store_path) if tag_store_path else None)
     input_files = list(scanner.iter_input_files(paths, recursive=recursive))
     if not input_files:
         print("No readable files were found.", file=sys.stderr)
@@ -39,7 +39,7 @@ def run_cli(paths: Iterable[str], recursive: bool, json_path: str | None, csv_pa
         )
 
     if json_path:
-        destination = write_json_report(results, json_path)
+        destination = write_json_report(results, json_path, execution_environment=execution_environment)
         print(f"JSON report: {destination}")
     if csv_path:
         destination = write_csv_report(results, csv_path)
@@ -50,7 +50,19 @@ def run_cli(paths: Iterable[str], recursive: bool, json_path: str | None, csv_pa
     return 1 if high_count else 0
 
 
-def run_gui() -> int:
+def build_gui_startup_config(paths: Iterable[str] | None, recursive: bool, json_path: str | None, csv_path: str | None, tag_store_path: str | None, execution_environment: str | None) -> dict[str, object]:
+    return {
+        "initial_paths": list(paths or []),
+        "recursive": bool(recursive),
+        "json_path": json_path,
+        "csv_path": csv_path,
+        "tag_store_path": tag_store_path,
+        "execution_environment": execution_environment,
+        "initial_exports_pending": bool(json_path or csv_path),
+    }
+
+
+def run_gui(initial_paths: Iterable[str] | None = None, recursive: bool = False, json_path: str | None = None, csv_path: str | None = None, tag_store_path: str | None = None, execution_environment: str | None = None) -> int:
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
@@ -66,7 +78,11 @@ def run_gui() -> int:
             self.minsize(980, 620)
 
             self.scanner = FileScanner()
-            self.tag_store = TagStore()
+            self.tag_store = TagStore(Path(tag_store_path) if tag_store_path else None)
+            self.initial_json_path = json_path
+            self.initial_csv_path = csv_path
+            self.execution_environment = execution_environment
+            self.initial_exports_pending = bool(json_path or csv_path)
             self.results: list[ScanResult] = []
             self.result_by_iid: dict[str, ScanResult] = {}
             self.worker_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -79,6 +95,8 @@ def run_gui() -> int:
 
             self._build_ui(ttk, tk, filedialog, messagebox)
             self.after(100, self._poll_worker)
+            if initial_paths:
+                self.after(250, lambda: self._start_scan(list(initial_paths), recursive=recursive, is_initial=True))
 
         def _build_ui(self, ttk, tk, filedialog, messagebox) -> None:
             self._filedialog = filedialog
@@ -187,7 +205,7 @@ def run_gui() -> int:
             if folder:
                 self._start_scan([folder], recursive=self.recursive_var.get())
 
-        def _start_scan(self, inputs: list[str], recursive: bool) -> None:
+        def _start_scan(self, inputs: list[str], recursive: bool, is_initial: bool = False) -> None:
             if self.worker and self.worker.is_alive():
                 self._messagebox.showinfo(APP_NAME, "A scan is already running.")
                 return
@@ -208,7 +226,7 @@ def run_gui() -> int:
                         result = self.scanner.scan_file(path)
                         result.tags = self.tag_store.get_tags(result.sha256)
                         self.worker_queue.put(("result", result))
-                    self.worker_queue.put(("done", self.cancel_event.is_set()))
+                    self.worker_queue.put(("done", {"cancelled": self.cancel_event.is_set(), "initial": is_initial}))
                 except Exception as exc:
                     self.worker_queue.put(("fatal", f"{type(exc).__name__}: {exc}"))
 
@@ -228,8 +246,13 @@ def run_gui() -> int:
                     elif kind == "result":
                         self._insert_result(payload)  # type: ignore[arg-type]
                     elif kind == "done":
-                        cancelled = bool(payload)
-                        self._scan_finished(cancelled)
+                        if isinstance(payload, dict):
+                            cancelled = bool(payload.get("cancelled"))
+                            is_initial = bool(payload.get("initial"))
+                        else:
+                            cancelled = bool(payload)
+                            is_initial = False
+                        self._scan_finished(cancelled, is_initial=is_initial)
                     elif kind == "fatal":
                         self._scan_finished(False)
                         self._messagebox.showerror(APP_NAME, f"Scan failed:\n{payload}")
@@ -257,7 +280,7 @@ def run_gui() -> int:
                 self.tree.focus(iid)
                 self._display_result(result)
 
-        def _scan_finished(self, cancelled: bool) -> None:
+        def _scan_finished(self, cancelled: bool, is_initial: bool = False) -> None:
             self.files_button.configure(state="normal")
             self.folder_button.configure(state="normal")
             self.cancel_button.configure(state="disabled")
@@ -266,6 +289,8 @@ def run_gui() -> int:
             else:
                 high = sum(1 for result in self.results if result.highest_severity in {"HIGH", "CRITICAL"})
                 self.status_var.set(f"Scan complete. {len(self.results)} result(s); {high} high/critical.")
+                if is_initial and self.initial_exports_pending:
+                    self._write_initial_exports_once()
 
         def _cancel_scan(self) -> None:
             self.cancel_event.set()
@@ -346,6 +371,20 @@ def run_gui() -> int:
             self.clipboard_append(text)
             self.status_var.set("Inspection details copied to the clipboard.")
 
+
+        def _write_initial_exports_once(self) -> None:
+            self.initial_exports_pending = False
+            written: list[str] = []
+            try:
+                if self.initial_json_path:
+                    written.append(str(write_json_report(self.results, self.initial_json_path, execution_environment=self.execution_environment)))
+                if self.initial_csv_path:
+                    written.append(str(write_csv_report(self.results, self.initial_csv_path)))
+                if written:
+                    self.status_var.set("Initial scan complete. Reports saved: " + "; ".join(written))
+            except Exception as exc:
+                self._messagebox.showerror(APP_NAME, f"Could not save initial report:\n{type(exc).__name__}: {exc}")
+
         def _export_report(self) -> None:
             if not self.results:
                 self._messagebox.showinfo(APP_NAME, "There are no results to export.")
@@ -361,7 +400,7 @@ def run_gui() -> int:
                 if Path(destination).suffix.lower() == ".csv":
                     write_csv_report(self.results, destination)
                 else:
-                    write_json_report(self.results, destination)
+                    write_json_report(self.results, destination, execution_environment=self.execution_environment)
                 self.status_var.set(f"Report saved: {destination}")
             except Exception as exc:
                 self._messagebox.showerror(APP_NAME, f"Could not save report:\n{type(exc).__name__}: {exc}")
@@ -380,6 +419,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", dest="json_path", help="Write a JSON report to this path.")
     parser.add_argument("--csv", dest="csv_path", help="Write a CSV report to this path.")
     parser.add_argument("--gui", action="store_true", help="Open the GUI even when paths are supplied.")
+    parser.add_argument("--tag-store", dest="tag_store_path", help="Store local tags at this path instead of the default app-data location.")
+    parser.add_argument("--execution-environment", dest="execution_environment", help=argparse.SUPPRESS)
     parser.add_argument("--version", action="version", version=f"{APP_NAME} {VERSION}")
     return parser
 
@@ -387,8 +428,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     if args.gui or not args.paths:
-        return run_gui()
-    return run_cli(args.paths, recursive=args.recursive, json_path=args.json_path, csv_path=args.csv_path)
+        return run_gui(args.paths, recursive=args.recursive, json_path=args.json_path, csv_path=args.csv_path, tag_store_path=args.tag_store_path, execution_environment=args.execution_environment)
+    return run_cli(args.paths, recursive=args.recursive, json_path=args.json_path, csv_path=args.csv_path, tag_store_path=args.tag_store_path, execution_environment=args.execution_environment)
 
 
 if __name__ == "__main__":
