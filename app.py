@@ -19,9 +19,9 @@ from file_guardian import (
 )
 
 
-def run_cli(paths: Iterable[str], recursive: bool, json_path: str | None, csv_path: str | None) -> int:
+def run_cli(paths: Iterable[str], recursive: bool, json_path: str | None, csv_path: str | None, tag_store_path: str | None = None) -> int:
     scanner = FileScanner()
-    tag_store = TagStore()
+    tag_store = TagStore(Path(tag_store_path) if tag_store_path else None)
     input_files = list(scanner.iter_input_files(paths, recursive=recursive))
     if not input_files:
         print("No readable files were found.", file=sys.stderr)
@@ -50,7 +50,7 @@ def run_cli(paths: Iterable[str], recursive: bool, json_path: str | None, csv_pa
     return 1 if high_count else 0
 
 
-def run_gui() -> int:
+def run_gui(initial_paths: Iterable[str] | None = None, recursive: bool = True, json_path: str | None = None, csv_path: str | None = None, tag_store_path: str | None = None) -> int:
     try:
         import tkinter as tk
         from tkinter import filedialog, messagebox, ttk
@@ -66,7 +66,10 @@ def run_gui() -> int:
             self.minsize(980, 620)
 
             self.scanner = FileScanner()
-            self.tag_store = TagStore()
+            self.tag_store = TagStore(Path(tag_store_path) if tag_store_path else None)
+            self.auto_export_json = json_path
+            self.auto_export_csv = csv_path
+            self.auto_export_pending = bool(initial_paths)
             self.results: list[ScanResult] = []
             self.result_by_iid: dict[str, ScanResult] = {}
             self.worker_queue: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -79,6 +82,9 @@ def run_gui() -> int:
 
             self._build_ui(ttk, tk, filedialog, messagebox)
             self.after(100, self._poll_worker)
+            if initial_paths:
+                self.recursive_var.set(recursive)
+                self.after(250, lambda: self._start_scan(list(initial_paths), recursive=recursive, auto_export=True))
 
         def _build_ui(self, ttk, tk, filedialog, messagebox) -> None:
             self._filedialog = filedialog
@@ -187,7 +193,7 @@ def run_gui() -> int:
             if folder:
                 self._start_scan([folder], recursive=self.recursive_var.get())
 
-        def _start_scan(self, inputs: list[str], recursive: bool) -> None:
+        def _start_scan(self, inputs: list[str], recursive: bool, auto_export: bool = False) -> None:
             if self.worker and self.worker.is_alive():
                 self._messagebox.showinfo(APP_NAME, "A scan is already running.")
                 return
@@ -196,6 +202,7 @@ def run_gui() -> int:
             self.folder_button.configure(state="disabled")
             self.cancel_button.configure(state="normal")
             self.status_var.set("Enumerating files…")
+            self.auto_export_pending = auto_export
 
             def worker() -> None:
                 try:
@@ -266,6 +273,9 @@ def run_gui() -> int:
             else:
                 high = sum(1 for result in self.results if result.highest_severity in {"HIGH", "CRITICAL"})
                 self.status_var.set(f"Scan complete. {len(self.results)} result(s); {high} high/critical.")
+                if self.auto_export_pending:
+                    self._auto_export_reports()
+                    self.auto_export_pending = False
 
         def _cancel_scan(self) -> None:
             self.cancel_event.set()
@@ -346,6 +356,20 @@ def run_gui() -> int:
             self.clipboard_append(text)
             self.status_var.set("Inspection details copied to the clipboard.")
 
+        def _auto_export_reports(self) -> None:
+            errors = []
+            for kind, destination, writer in (("JSON", self.auto_export_json, write_json_report), ("CSV", self.auto_export_csv, write_csv_report)):
+                if not destination:
+                    continue
+                try:
+                    writer(self.results, destination)
+                except Exception as exc:
+                    errors.append(f"{kind}: {type(exc).__name__}: {exc}")
+            if errors:
+                self._messagebox.showerror(APP_NAME, "Automatic report export failed:\n" + "\n".join(errors))
+            elif self.auto_export_json or self.auto_export_csv:
+                self.status_var.set("Automatic reports saved.")
+
         def _export_report(self) -> None:
             if not self.results:
                 self._messagebox.showinfo(APP_NAME, "There are no results to export.")
@@ -380,6 +404,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--json", dest="json_path", help="Write a JSON report to this path.")
     parser.add_argument("--csv", dest="csv_path", help="Write a CSV report to this path.")
     parser.add_argument("--gui", action="store_true", help="Open the GUI even when paths are supplied.")
+    parser.add_argument("--tag-store", dest="tag_store_path", help="Store local file tags at this JSON path.")
     parser.add_argument("--version", action="version", version=f"{APP_NAME} {VERSION}")
     return parser
 
@@ -387,8 +412,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_parser().parse_args()
     if args.gui or not args.paths:
-        return run_gui()
-    return run_cli(args.paths, recursive=args.recursive, json_path=args.json_path, csv_path=args.csv_path)
+        return run_gui(args.paths, recursive=args.recursive, json_path=args.json_path, csv_path=args.csv_path, tag_store_path=args.tag_store_path)
+    return run_cli(args.paths, recursive=args.recursive, json_path=args.json_path, csv_path=args.csv_path, tag_store_path=args.tag_store_path)
 
 
 if __name__ == "__main__":

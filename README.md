@@ -153,3 +153,53 @@ The architecture is ready for later additions such as:
 - signed manifests, chain-of-custody records, and role-based approval tags.
 
 Do not add “tracking tags” to documents themselves without a separate design and authorization review. Version 0.1 provides non-invasive local classification tags only.
+
+## Windows Sandbox default launcher
+
+On Windows, `Run_File_Guardian.bat` is the default launcher and starts File Guardian inside a hardened Windows Sandbox. It does not fall back to host execution if Sandbox is unavailable. Use `Run_File_Guardian_Locally.bat` only as a less-isolated development or troubleshooting fallback; it warns and requires `RUNLOCAL` confirmation because document parsers run directly on the host.
+
+Supported Windows Sandbox editions are Windows Pro, Enterprise, and Education with hardware virtualization enabled. Windows Home is not supported. To enable Sandbox, open an elevated PowerShell yourself and run:
+
+```powershell
+Enable-WindowsOptionalFeature -Online -FeatureName "Containers-DisposableClientVM" -All
+```
+
+Restart Windows after enabling the feature.
+
+### First-run and rebuild workflow
+
+1. Run `Install_and_Run.bat` from a fresh clone. It checks Windows edition, virtualization, and Sandbox feature state without silently elevating or changing OS settings.
+2. It calls `Build_Sandbox_Runtime.bat`, which creates `.build-venv`, installs runtime/build dependencies, runs the full test suite, builds the PyInstaller one-folder runtime at `dist\FileGuardian\FileGuardian.exe`, and runs `dist\FileGuardian\FileGuardian.exe --version`.
+3. After the build succeeds, it launches `Run_File_Guardian.bat`.
+4. Re-run `Build_Sandbox_Runtime.bat` after pulling scanner-code, dependency, spec, or sandbox bootstrap changes. `Run_File_Guardian.bat` refuses to use a missing or stale packaged runtime.
+
+`Build_Sandbox_Runtime.bat` builds trusted scanner runtime files only; it never scans user documents.
+
+### Host folders exposed to Windows Sandbox
+
+The generated `.wsb` maps only these folders:
+
+| Host folder | Sandbox folder | Access |
+| --- | --- | --- |
+| `<repo>\dist\FileGuardian` | `C:\FileGuardian\Runtime` | read-only |
+| selected input folder | `C:\FileGuardian\Input` | read-only |
+| `%LOCALAPPDATA%\FileGuardian\Runs\<run-id>` | `C:\FileGuardian\Output` | writable |
+| `%LOCALAPPDATA%\FileGuardian\State` | `C:\FileGuardian\State` | writable |
+
+The selected input must currently be one folder; local execution can still scan individual files. Runtime and input are read-only. Output and state are writable by sandboxed code and must be treated as untrusted after the sandbox exits. Plain Windows Sandbox defaults can allow networking and clipboard sharing, but File Guardian's generated configuration disables networking, clipboard redirection, microphone, camera, printer redirection, and virtualized GPU, and enables Protected Client mode.
+
+A clean static scan is not proof that a file is safe or authorized to share. Encrypted content, obfuscation, viewer telemetry, cloud logging, DRM callbacks, and exploits may remain undetected.
+
+### Troubleshooting Windows Sandbox startup
+
+- **Windows Home**: Windows Sandbox is unavailable; use a supported Pro, Enterprise, or Education edition.
+- **Virtualization disabled**: enable CPU virtualization in firmware/UEFI and reboot.
+- **Sandbox feature disabled**: run the elevated PowerShell command above and restart.
+- **PyInstaller build failure**: review the failing `Build_Sandbox_Runtime.bat` step; tests must pass before packaging.
+- **Missing Tkinter**: install a Python build that includes Tcl/Tk before building.
+- **Sandbox launch failure**: confirm Windows Sandbox opens independently and that `dist\FileGuardian\FileGuardian.exe` exists.
+- **Protected Client compatibility problems**: update Windows and graphics drivers; if Protected Client is unsupported, File Guardian fails closed rather than weakening the generated sandbox configuration.
+
+### Source manifest
+
+Run `python scripts/update_sha256sums.py` after source changes to regenerate `SHA256SUMS.txt`. The manifest intentionally excludes generated build/runtime artifacts.

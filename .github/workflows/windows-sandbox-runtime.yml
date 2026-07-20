@@ -1,0 +1,57 @@
+name: Windows sandbox runtime
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-and-validate:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: python -m pip install --upgrade pip; python -m pip install -r requirements.txt -r requirements-build.txt
+      - name: Run tests
+        run: python -m pytest
+      - name: Build runtime
+        shell: cmd
+        run: Build_Sandbox_Runtime.bat
+      - name: Version smoke test
+        run: .\dist\FileGuardian\FileGuardian.exe --version
+      - name: Packaged CLI smoke scan
+        shell: pwsh
+        run: |
+          $input = Join-Path $env:RUNNER_TEMP 'fg input & unicode Ω'
+          New-Item -ItemType Directory -Force -Path $input | Out-Null
+          'https://example.com/?utm_source=ci' | Set-Content -LiteralPath (Join-Path $input 'sample.txt') -Encoding UTF8
+          $json = Join-Path $env:RUNNER_TEMP 'report.json'
+          $csv = Join-Path $env:RUNNER_TEMP 'report.csv'
+          .\dist\FileGuardian\FileGuardian.exe $input --recursive --json $json --csv $csv
+          if (-not (Test-Path $json) -or -not (Test-Path $csv)) { throw 'reports missing' }
+          Get-Content $json -Raw | ConvertFrom-Json | Out-Null
+          Import-Csv $csv | Out-Null
+      - name: Generate and validate WSB
+        shell: pwsh
+        run: |
+          $input = Join-Path $env:RUNNER_TEMP 'sandbox input & Ω'
+          New-Item -ItemType Directory -Force -Path $input | Out-Null
+          $wsb = Join-Path $env:RUNNER_TEMP 'fileguardian.wsb'
+          .\sandbox\Launch-FileGuardianSandbox.ps1 -InputPath $input -GenerateOnly -OutputWsbPath $wsb
+          [xml]$xml = Get-Content $wsb -Raw
+          if ($xml.Configuration.Networking -ne 'Disable') { throw 'Networking not disabled' }
+          if ($xml.Configuration.ClipboardRedirection -ne 'Disable') { throw 'Clipboard not disabled' }
+          if ($xml.Configuration.VGpu -ne 'Disable') { throw 'VGpu not disabled' }
+          if ($xml.Configuration.ProtectedClient -ne 'Enable') { throw 'ProtectedClient not enabled' }
+          $maps = @($xml.Configuration.MappedFolders.MappedFolder)
+          if ($maps.Count -ne 4) { throw 'unexpected mapped folder count' }
+          foreach ($bad in @('C:\', $env:USERPROFILE, [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('MyDocuments'))) {
+            if ($bad -and ($maps.HostFolder | ForEach-Object { $_.TrimEnd('\') }) -contains $bad.TrimEnd('\')) { throw "broad host mapping: $bad" }
+          }
+          $bySandbox = @{}; foreach ($m in $maps) { $bySandbox[$m.SandboxFolder] = $m }
+          if ($bySandbox['C:\FileGuardian\Runtime'].ReadOnly -ne 'true') { throw 'runtime not readonly' }
+          if ($bySandbox['C:\FileGuardian\Input'].ReadOnly -ne 'true') { throw 'input not readonly' }
+          if ($bySandbox['C:\FileGuardian\Output'].ReadOnly -ne 'false') { throw 'output not writable' }
+          if ($bySandbox['C:\FileGuardian\State'].ReadOnly -ne 'false') { throw 'state not writable' }

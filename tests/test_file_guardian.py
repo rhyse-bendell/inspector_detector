@@ -100,3 +100,62 @@ class FileGuardianTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class FileGuardianSandboxFeatureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp_dir.name)
+        self.scanner = FileScanner()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_custom_tag_store_persists_and_source_unchanged(self) -> None:
+        doc = self.root / "source.txt"
+        doc.write_text("hello", encoding="utf-8")
+        before = doc.read_bytes()
+        result = self.scanner.scan_file(doc)
+        store_path = self.root / "state" / "custom-tags.json"
+        first = TagStore(store_path)
+        first.add_tags(result.sha256, ["review"], str(doc))
+        second = TagStore(store_path)
+        self.assertEqual(second.get_tags(result.sha256), ["review"])
+        second.remove_tags(result.sha256, ["review"])
+        self.assertEqual(doc.read_bytes(), before)
+        self.assertEqual(TagStore(store_path).get_tags(result.sha256), [])
+
+    def test_malformed_tag_store_fails_safely_without_touching_source(self) -> None:
+        doc = self.root / "source.txt"
+        doc.write_text("hello", encoding="utf-8")
+        before = doc.read_bytes()
+        store_path = self.root / "bad-tags.json"
+        store_path.write_text("{not json", encoding="utf-8")
+        result = self.scanner.scan_file(doc)
+        store = TagStore(store_path)
+        self.assertEqual(store.get_tags(result.sha256), [])
+        self.assertEqual(doc.read_bytes(), before)
+
+    def test_execution_environment_json_metadata(self) -> None:
+        import os
+        doc = self.root / "source.txt"
+        doc.write_text("hello", encoding="utf-8")
+        old = os.environ.get("FILE_GUARDIAN_EXECUTION_ENVIRONMENT")
+        os.environ["FILE_GUARDIAN_EXECUTION_ENVIRONMENT"] = "windows-sandbox"
+        try:
+            report = write_json_report([self.scanner.scan_file(doc)], self.root / "report.json")
+        finally:
+            if old is None:
+                os.environ.pop("FILE_GUARDIAN_EXECUTION_ENVIRONMENT", None)
+            else:
+                os.environ["FILE_GUARDIAN_EXECUTION_ENVIRONMENT"] = old
+        self.assertEqual(json.loads(report.read_text(encoding="utf-8"))["execution_environment"], "windows-sandbox")
+
+    def test_gui_argument_parsing_records_initial_scan_options(self) -> None:
+        from app import build_parser
+        args = build_parser().parse_args(["C:/Input", "--recursive", "--gui", "--json", "out.json", "--csv", "out.csv", "--tag-store", "tags.json"])
+        self.assertTrue(args.gui)
+        self.assertTrue(args.recursive)
+        self.assertEqual(args.paths, ["C:/Input"])
+        self.assertEqual(args.json_path, "out.json")
+        self.assertEqual(args.csv_path, "out.csv")
+        self.assertEqual(args.tag_store_path, "tags.json")

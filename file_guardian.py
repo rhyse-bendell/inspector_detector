@@ -2097,6 +2097,10 @@ def write_json_report(results: Iterable[ScanResult], destination: str | Path) ->
         ),
         "results": [result.as_dict() for result in results],
     }
+    execution_environment = os.environ.get("FILE_GUARDIAN_EXECUTION_ENVIRONMENT")
+    if execution_environment:
+        payload["execution_environment"] = execution_environment
+    destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return destination
 
@@ -2120,6 +2124,7 @@ def write_csv_report(results: Iterable[ScanResult], destination: str | Path) -> 
         "notes",
         "error",
     ]
+    destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
